@@ -2071,8 +2071,9 @@ jobs:
             echo "::error::Add the KEYSTORE_B64 and KEYSTORE_PASSWORD secrets to the repository first."
             exit 1
           fi
-          echo "$KEYSTORE_B64" | base64 -d > release.keystore
-          KS_PASS="$KEYSTORE_PASSWORD"
+          # ignore spaces / line breaks that sneak in when the secrets are pasted
+          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > release.keystore
+          KS_PASS=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:space:]')
           echo "::add-mask::$KS_PASS"
           echo "KS_PASS=$KS_PASS" >> $GITHUB_ENV
           echo "KS_PATH=$PWD/release.keystore" >> $GITHUB_ENV
