@@ -1,0 +1,975 @@
+name: Build Study Buddy APK
+
+# Builds the real Study Buddy Android app: every app file is packed inside the APK.
+# The app files are downloaded from the live site during the build, so no app code is stored here.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-apk.yml
+
+permissions:
+  contents: write
+
+env:
+  SITE: https://melodic-mousse-4aeab3.netlify.app
+  VERSION_NAME: "2.0.0"
+  VERSION_CODE: "2"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Write the Android app source
+        run: |
+          mkdir -p sb/tools sb/app/src/main/java/com/grabbyapp/studybuddy sb/app/src/main/res/{values,drawable,xml} sb/app/src/main/assets/www/vendor/tesseract/lang
+          cd sb
+
+          cat > app/src/main/AndroidManifest.xml <<'SB_FILE_0_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+
+              <queries>
+                  <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+                  <intent>
+                      <action android:name="android.intent.action.GET_CONTENT" />
+                      <data android:mimeType="*/*" />
+                  </intent>
+                  <intent>
+                      <action android:name="android.intent.action.VIEW" />
+                      <data android:scheme="https" />
+                  </intent>
+                  <intent><action android:name="android.intent.action.SEND" /><data android:mimeType="text/plain" /></intent>
+              </queries>
+
+              <application
+                  android:label="Study Buddy"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:allowBackup="true"
+                  android:supportsRtl="true"
+                  android:hardwareAccelerated="true"
+                  android:usesCleartextTraffic="false"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:screenOrientation="portrait"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="https" android:host="melodic-mousse-4aeab3.netlify.app" />
+                      </intent-filter>
+                  </activity>
+
+                  <receiver android:name=".AlarmReceiver" android:exported="false" />
+                  <receiver android:name=".BootReceiver" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                      </intent-filter>
+                  </receiver>
+
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="com.grabbyapp.studybuddy.files"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
+              </application>
+          </manifest>
+          SB_FILE_0_END
+
+          cat > app/src/main/res/values/styles.xml <<'SB_FILE_1_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+                  <item name="android:windowBackground">@color/bg</item>
+                  <item name="android:colorPrimary">@color/primary</item>
+                  <item name="android:colorPrimaryDark">@color/primary</item>
+                  <item name="android:colorAccent">@color/primary</item>
+                  <item name="android:statusBarColor">@color/primary</item>
+                  <item name="android:navigationBarColor">@color/bg</item>
+              </style>
+              <color name="primary">#2563EB</color>
+              <color name="bg">#EFF6FF</color>
+          </resources>
+          SB_FILE_1_END
+
+          cat > app/src/main/res/drawable/ic_stat.xml <<'SB_FILE_2_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M5,13.18v4L12,21l7,-3.82v-4L12,17l-7,-3.82zM12,3L1,9l11,6 9,-4.91V17h2V9L12,3z" />
+          </vector>
+          SB_FILE_2_END
+
+          cat > app/src/main/res/xml/file_paths.xml <<'SB_FILE_3_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="camera" path="camera/" />
+          </paths>
+          SB_FILE_3_END
+
+          cat > tools/patch.py <<'SB_FILE_4_END'
+          """Adapts the Study Buddy web files so they run from inside the APK.
+
+          Run from the folder that holds the app files (assets/www). Every change is checked:
+          if the app code changed and a patch no longer fits, the build stops with a clear error.
+          """
+          import pathlib
+          import sys
+
+          SITE = "https://melodic-mousse-4aeab3.netlify.app/"
+          root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+
+
+          def patch(name, old, new, count=1):
+              p = root / name
+              s = p.read_text(encoding="utf-8")
+              n = s.count(old)
+              if n != count:
+                  sys.exit(f"patch failed: {name}: expected {count} of {old!r}, found {n}")
+              p.write_text(s.replace(old, new), encoding="utf-8")
+              print(f"patched {name}: {old[:60]!r}")
+
+
+          # Supabase library comes from the APK instead of the internet
+          patch("data.js",
+                "await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')",
+                "await window.__loadSupabase()")
+          # Email links (confirm account, reset password) open the website version
+          patch("data.js", "location.origin + location.pathname", f"'{SITE}'", count=2)
+
+          # Share links point to the public website (they open in the app too if it is installed)
+          patch("app.js", "`${location.origin}${location.pathname}#import/${code}`", "`" + SITE + "#import/${code}`")
+          patch("app.js", "https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js", "vendor/qrcode.js")
+
+          # File readers bundled in the APK
+          patch("importer.js", "'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js'", "'vendor/pdf.min.js'")
+          patch("importer.js", "'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'",
+                "new URL('vendor/pdf.worker.min.js', location.href).href")
+          patch("importer.js", "'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'", "'vendor/jszip.min.js'")
+          patch("importer.js", "'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'", "'vendor/tesseract/tesseract.min.js'")
+          patch("importer.js", "await T.recognize(img, 'eng', {",
+                "await T.recognize(img, 'eng', {\n"
+                "    workerPath: new URL('vendor/tesseract/worker.min.js', location.href).href,\n"
+                "    corePath: new URL('vendor/tesseract/', location.href).href,\n"
+                "    langPath: new URL('vendor/tesseract/lang', location.href).href,\n"
+                "    workerBlobURL: false,\n")
+
+          # Alarms: hand the upcoming alarm times to Android so they ring when the app is closed
+          patch("alarm.js", "  const tick = () => {\n",
+                "  const tick = () => {\n"
+                "    try {\n"
+                "      const pp = getProfile();\n"
+                "      if (pp && window.AndroidApp) {\n"
+                "        const list = JSON.stringify(upcoming(pp, userId, 7).filter(t => !isHandled(t)).map(t => t.getTime()));\n"
+                "        if (list !== window.__sbAlarms) { window.__sbAlarms = list; window.AndroidApp.scheduleAlarms(list); }\n"
+                "      }\n"
+                "    } catch (e) { }\n")
+
+          # Pages: bundled font + phone helpers (loaded before the app starts)
+          for page, module in (("index.html", '<script type="module" src="app.js"></script>'),
+                               ("admin.html", '<script type="module" src="admin.js"></script>')):
+              patch(page, "https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap", "vendor/fonts.css")
+              patch(page, module, '<script src="android.js"></script>\n  ' + module)
+          patch("index.html", '<link rel="preconnect" href="https://fonts.googleapis.com">', "")
+
+          print("all patches applied")
+          SB_FILE_4_END
+
+          cat > tools/android.js <<'SB_FILE_5_END'
+          // Study Buddy Android app helpers.
+          // Lets the app (stored inside the APK) use the phone: notifications, alarms that ring
+          // when the app is closed, vibration, the share sheet and saving files to Downloads.
+          (function () {
+            // Supabase library is bundled in the APK (vendor/supabase.js)
+            window.__loadSupabase = function () {
+              if (window.supabase && window.supabase.createClient) return Promise.resolve(window.supabase);
+              return new Promise(function (ok, bad) {
+                var s = document.createElement('script');
+                s.src = 'vendor/supabase.js';
+                s.onload = function () { ok(window.supabase); };
+                s.onerror = function () { bad(new Error('Could not load the app. Please reinstall Study Buddy.')); };
+                document.head.appendChild(s);
+              });
+            };
+
+            var A = window.AndroidApp;
+            if (!A) return;
+
+            // Files are already on the phone, so no service worker is needed.
+            try {
+              if (navigator.serviceWorker) {
+                navigator.serviceWorker.register = function () { return Promise.reject(new Error('Not needed in the app')); };
+                navigator.serviceWorker.getRegistration = function () { return Promise.resolve(undefined); };
+              }
+            } catch (e) { }
+
+            // Phone notifications
+            function AppNotification(title, opts) {
+              try { A.showNotification(String(title || ''), String((opts && opts.body) || '')); } catch (e) { }
+            }
+            Object.defineProperty(AppNotification, 'permission', {
+              get: function () { try { return A.notificationPermission(); } catch (e) { return 'default'; } }
+            });
+            var waiting = [];
+            AppNotification.requestPermission = function (cb) {
+              return new Promise(function (res) {
+                waiting.push(function (s) { res(s); if (typeof cb === 'function') cb(s); });
+                A.requestNotificationPermission();
+              });
+            };
+            window.__notifPermResult = function (s) { var w = waiting; waiting = []; w.forEach(function (f) { f(s); }); };
+            try { Object.defineProperty(window, 'Notification', { value: AppNotification, configurable: true, writable: true }); }
+            catch (e) { window.Notification = AppNotification; }
+
+            // Vibration and share sheet
+            try {
+              Object.defineProperty(navigator, 'vibrate', {
+                configurable: true,
+                value: function (p) { try { A.vibrate(JSON.stringify(p === undefined ? 0 : p)); } catch (e) { } return true; }
+              });
+            } catch (e) { }
+            try {
+              Object.defineProperty(navigator, 'share', {
+                configurable: true,
+                value: function (d) { d = d || {}; A.share(String(d.title || ''), String(d.text || ''), String(d.url || '')); return Promise.resolve(); }
+              });
+            } catch (e) { }
+
+            // "Download" buttons save into the phone's Downloads folder
+            var revoke = URL.revokeObjectURL.bind(URL);
+            URL.revokeObjectURL = function (u) { setTimeout(function () { revoke(u); }, 60000); };
+            var click = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function () {
+              var a = this;
+              if (a.download && /^(blob|data):/.test(a.href)) {
+                fetch(a.href).then(function (r) { return r.blob(); }).then(function (b) {
+                  var fr = new FileReader();
+                  fr.onload = function () { A.saveFile(a.download, b.type || 'application/octet-stream', String(fr.result).split(',')[1] || ''); };
+                  fr.readAsDataURL(b);
+                }).catch(function () { });
+                return;
+              }
+              return click.call(a);
+            };
+          })();
+          SB_FILE_5_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/AlarmReceiver.java <<'SB_FILE_6_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          public class AlarmReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context c, Intent intent) {
+                  // If the app is open, it shows its own alarm screen.
+                  if (MainActivity.visible) return;
+                  Notifier.createChannels(c);
+                  Notifier.show(c, Notifier.CH_ALARM,
+                          "⏰ Grabby: Surprise study time!",
+                          "Open Study Buddy now and answer a few cards to stop the alarm.",
+                          777);
+              }
+          }
+          SB_FILE_6_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/AlarmScheduler.java <<'SB_FILE_7_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+
+          import org.json.JSONArray;
+
+          /** Keeps the surprise study alarms scheduled with Android, so they ring when the app is closed. */
+          public class AlarmScheduler {
+              static final String PREFS = "alarms";
+
+              static void save(Context c, String json) {
+                  c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("times", json == null ? "[]" : json).apply();
+              }
+
+              static synchronized void scheduleAll(Context c) {
+                  AlarmManager am = c.getSystemService(AlarmManager.class);
+                  if (am == null) return;
+                  SharedPreferences sp = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+
+                  int old = sp.getInt("count", 0);
+                  for (int i = 0; i < old; i++) am.cancel(pending(c, i, 0));
+
+                  JSONArray arr;
+                  try { arr = new JSONArray(sp.getString("times", "[]")); } catch (Exception e) { arr = new JSONArray(); }
+
+                  long now = System.currentTimeMillis();
+                  int n = 0;
+                  for (int i = 0; i < arr.length() && n < 40; i++) {
+                      long t = arr.optLong(i, 0);
+                      if (t <= now) continue;
+                      PendingIntent pi = pending(c, n, t);
+                      try {
+                          if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms())
+                              am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, t, pi);
+                          else
+                              am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, t, pi);
+                      } catch (SecurityException e) {
+                          am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, t, pi);
+                      }
+                      n++;
+                  }
+                  sp.edit().putInt("count", n).apply();
+              }
+
+              static PendingIntent pending(Context c, int slot, long time) {
+                  Intent it = new Intent(c, AlarmReceiver.class).putExtra("time", time);
+                  return PendingIntent.getBroadcast(c, 5000 + slot, it,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+              }
+          }
+          SB_FILE_7_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/BootReceiver.java <<'SB_FILE_8_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          /** Puts the study alarms back after the phone restarts. */
+          public class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context c, Intent intent) {
+                  String a = intent.getAction();
+                  if (Intent.ACTION_BOOT_COMPLETED.equals(a) || Intent.ACTION_MY_PACKAGE_REPLACED.equals(a)) {
+                      AlarmScheduler.scheduleAll(c);
+                  }
+              }
+          }
+          SB_FILE_8_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/Bridge.java <<'SB_FILE_9_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.content.ContentResolver;
+          import android.content.ContentValues;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Environment;
+          import android.os.VibrationEffect;
+          import android.os.Vibrator;
+          import android.provider.MediaStore;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.widget.Toast;
+
+          import org.json.JSONArray;
+
+          import java.io.File;
+          import java.io.FileOutputStream;
+          import java.io.OutputStream;
+
+          /** Functions the app's JavaScript can call (window.AndroidApp). */
+          public class Bridge {
+              private final MainActivity a;
+
+              Bridge(MainActivity activity) { a = activity; }
+
+              @JavascriptInterface
+              public void showNotification(String title, String body) {
+                  String channel = title != null && title.contains("⏰") ? Notifier.CH_ALARM : Notifier.CH_GENERAL;
+                  Notifier.show(a, channel, title, body, 2000 + (int) (System.currentTimeMillis() % 1000));
+              }
+
+              @JavascriptInterface
+              public String notificationPermission() { return a.notifState(); }
+
+              @JavascriptInterface
+              public void requestNotificationPermission() { a.runOnUiThread(a::requestNotifPermission); }
+
+              /** JSON list of alarm times (milliseconds). They ring even when the app is closed. */
+              @JavascriptInterface
+              public void scheduleAlarms(String json) {
+                  AlarmScheduler.save(a, json);
+                  AlarmScheduler.scheduleAll(a);
+              }
+
+              @JavascriptInterface
+              public void vibrate(String json) {
+                  try {
+                      Vibrator v = (Vibrator) a.getSystemService(Context.VIBRATOR_SERVICE);
+                      if (v == null || !v.hasVibrator()) return;
+                      String s = json == null ? "" : json.trim();
+                      if (s.startsWith("[")) {
+                          JSONArray arr = new JSONArray(s);
+                          if (arr.length() == 0) { v.cancel(); return; }
+                          long[] pattern = new long[arr.length() + 1];
+                          pattern[0] = 0;
+                          for (int i = 0; i < arr.length(); i++) pattern[i + 1] = Math.max(0, arr.optLong(i, 0));
+                          if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createWaveform(pattern, -1));
+                          else v.vibrate(pattern, -1);
+                      } else {
+                          long ms = (long) Double.parseDouble(s.isEmpty() ? "0" : s);
+                          if (ms <= 0) { v.cancel(); return; }
+                          if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+                          else v.vibrate(ms);
+                      }
+                  } catch (Exception ignored) { }
+              }
+
+              @JavascriptInterface
+              public void share(String title, String text, String url) {
+                  String body = ((text == null ? "" : text) + " " + (url == null ? "" : url)).trim();
+                  Intent send = new Intent(Intent.ACTION_SEND);
+                  send.setType("text/plain");
+                  if (title != null && !title.isEmpty()) send.putExtra(Intent.EXTRA_SUBJECT, title);
+                  send.putExtra(Intent.EXTRA_TEXT, body);
+                  a.runOnUiThread(() -> a.startActivity(Intent.createChooser(send, "Share")));
+              }
+
+              @JavascriptInterface
+              public void openUrl(String url) {
+                  a.runOnUiThread(() -> a.openExternal(Uri.parse(url)));
+              }
+
+              /** Saves a file the app "downloads" (like My Data export) into the phone's Downloads folder. */
+              @JavascriptInterface
+              public String saveFile(String name, String mime, String base64) {
+                  try {
+                      byte[] data = Base64.decode(base64, Base64.DEFAULT);
+                      String safe = name == null || name.isEmpty() ? "studybuddy-file" : name.replaceAll("[\\\\/:*?\"<>|]", "_");
+                      if (Build.VERSION.SDK_INT >= 29) {
+                          ContentValues v = new ContentValues();
+                          v.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+                          v.put(MediaStore.Downloads.MIME_TYPE, mime == null || mime.isEmpty() ? "application/octet-stream" : mime);
+                          v.put(MediaStore.Downloads.IS_PENDING, 1);
+                          ContentResolver r = a.getContentResolver();
+                          Uri u = r.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                          if (u == null) throw new Exception("no uri");
+                          try (OutputStream o = r.openOutputStream(u)) { o.write(data); }
+                          v.clear();
+                          v.put(MediaStore.Downloads.IS_PENDING, 0);
+                          r.update(u, v, null, null);
+                      } else {
+                          File dir = a.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                          if (dir == null) throw new Exception("no folder");
+                          dir.mkdirs();
+                          try (FileOutputStream o = new FileOutputStream(new File(dir, safe))) { o.write(data); }
+                      }
+                      a.runOnUiThread(() -> Toast.makeText(a, "Saved to Downloads: " + safe, Toast.LENGTH_LONG).show());
+                      return "ok";
+                  } catch (Exception e) {
+                      a.runOnUiThread(() -> Toast.makeText(a, "Could not save the file", Toast.LENGTH_LONG).show());
+                      return "error";
+                  }
+              }
+          }
+          SB_FILE_9_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/MainActivity.java <<'SB_FILE_10_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.ActivityNotFoundException;
+          import android.content.ClipData;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.provider.MediaStore;
+          import android.webkit.MimeTypeMap;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          import androidx.core.content.FileProvider;
+          import androidx.webkit.WebViewAssetLoader;
+
+          import java.io.File;
+          import java.util.ArrayList;
+
+          /** Study Buddy: the whole app is stored inside the APK (assets/www) and runs on the phone. */
+          public class MainActivity extends Activity {
+              static final String ASSET_HOST = "appassets.androidplatform.net";
+              static final String HOME = "https://" + ASSET_HOST + "/assets/www/index.html";
+              static final String SITE_HOST = "melodic-mousse-4aeab3.netlify.app";
+              static final int REQ_FILES = 1, REQ_NOTIF = 2;
+              static volatile boolean visible = false;
+
+              WebView web;
+              WebViewAssetLoader loader;
+              ValueCallback<Uri[]> fileCallback;
+              Uri cameraUri;
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  Notifier.createChannels(this);
+                  AlarmScheduler.scheduleAll(this);
+
+                  loader = new WebViewAssetLoader.Builder()
+                          .setDomain(ASSET_HOST)
+                          .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                          .build();
+
+                  web = new WebView(this);
+                  web.setBackgroundColor(Color.parseColor("#EFF6FF"));
+                  setContentView(web);
+
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(false);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setTextZoom(100);
+                  s.setSupportZoom(false);
+                  s.setUserAgentString(s.getUserAgentString() + " StudyBuddyApp/2");
+
+                  web.addJavascriptInterface(new Bridge(this), "AndroidApp");
+
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          return loader.shouldInterceptRequest(request.getUrl());
+                      }
+
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          Uri u = request.getUrl();
+                          if (ASSET_HOST.equals(u.getHost())) return false;
+                          String local = localFor(u);
+                          if (local != null) { view.loadUrl(local); return true; }
+                          openExternal(u);
+                          return true;
+                      }
+                  });
+
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                          return chooseFiles(callback, params);
+                      }
+                  });
+
+                  web.loadUrl(startUrl(getIntent()));
+              }
+
+              /** A Study Buddy web link (like a shared deck) opens inside the app. */
+              static String localFor(Uri u) {
+                  if (u == null || !SITE_HOST.equals(u.getHost())) return null;
+                  String frag = u.getFragment();
+                  return HOME + (frag != null && !frag.isEmpty() ? "#" + frag : "");
+              }
+
+              String startUrl(Intent intent) {
+                  String local = intent != null ? localFor(intent.getData()) : null;
+                  return local != null ? local : HOME;
+              }
+
+              @Override
+              protected void onNewIntent(Intent intent) {
+                  super.onNewIntent(intent);
+                  setIntent(intent);
+                  String local = localFor(intent.getData());
+                  if (local != null) web.loadUrl(local);
+              }
+
+              @Override
+              protected void onResume() { super.onResume(); visible = true; if (web != null) web.onResume(); }
+
+              @Override
+              protected void onPause() { visible = false; if (web != null) web.onPause(); super.onPause(); }
+
+              @Override
+              public void onBackPressed() {
+                  if (web != null && web.canGoBack()) web.goBack();
+                  else super.onBackPressed();
+              }
+
+              void openExternal(Uri u) {
+                  try { startActivity(new Intent(Intent.ACTION_VIEW, u)); }
+                  catch (ActivityNotFoundException e) { /* nothing can open it */ }
+              }
+
+              // ---------------------------------------------------------------- files and camera
+              boolean chooseFiles(ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+                  if (fileCallback != null) fileCallback.onReceiveValue(null);
+                  fileCallback = callback;
+                  cameraUri = null;
+
+                  boolean images = false, anyType = false;
+                  ArrayList<String> mimes = new ArrayList<>();
+                  for (String a : params.getAcceptTypes()) {
+                      if (a == null) continue;
+                      for (String t : a.split(",")) {
+                          t = t.trim().toLowerCase();
+                          if (t.isEmpty()) continue;
+                          if (t.startsWith(".")) {
+                              String m = MimeTypeMap.getSingleton().getMimeTypeFromExtension(t.substring(1));
+                              if (m != null) mimes.add(m); else anyType = true;
+                              if (m != null && m.startsWith("image/")) images = true;
+                          } else {
+                              mimes.add(t);
+                              if (t.startsWith("image")) images = true;
+                          }
+                      }
+                  }
+
+                  try {
+                      if (params.isCaptureEnabled() && images) {
+                          File dir = new File(getCacheDir(), "camera");
+                          dir.mkdirs();
+                          File photo = new File(dir, "photo_" + System.currentTimeMillis() + ".jpg");
+                          cameraUri = FileProvider.getUriForFile(this, getPackageName() + ".files", photo);
+                          Intent cam = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                          cam.putExtra(MediaStore.EXTRA_OUTPUT, cameraUri);
+                          cam.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                          startActivityForResult(cam, REQ_FILES);
+                          return true;
+                      }
+                      Intent pick = new Intent(Intent.ACTION_GET_CONTENT);
+                      pick.addCategory(Intent.CATEGORY_OPENABLE);
+                      if (mimes.isEmpty() || anyType) pick.setType("*/*");
+                      else if (mimes.size() == 1) pick.setType(mimes.get(0));
+                      else { pick.setType("*/*"); pick.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0])); }
+                      if (params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE)
+                          pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                      startActivityForResult(Intent.createChooser(pick, "Choose files"), REQ_FILES);
+                      return true;
+                  } catch (Exception e) {
+                      fileCallback = null;
+                      cameraUri = null;
+                      return false;
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  if (requestCode != REQ_FILES) { super.onActivityResult(requestCode, resultCode, data); return; }
+                  Uri[] result = null;
+                  if (resultCode == RESULT_OK) {
+                      if (cameraUri != null) {
+                          result = new Uri[]{cameraUri};
+                      } else if (data != null) {
+                          ClipData clip = data.getClipData();
+                          if (clip != null && clip.getItemCount() > 0) {
+                              result = new Uri[clip.getItemCount()];
+                              for (int i = 0; i < result.length; i++) result[i] = clip.getItemAt(i).getUri();
+                          } else if (data.getData() != null) {
+                              result = new Uri[]{data.getData()};
+                          }
+                      }
+                  }
+                  if (fileCallback != null) fileCallback.onReceiveValue(result);
+                  fileCallback = null;
+                  cameraUri = null;
+              }
+
+              // ---------------------------------------------------------------- notification permission
+              String notifState() {
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return "granted";
+                      return getSharedPreferences("app", MODE_PRIVATE).getBoolean("askedNotif", false) ? "denied" : "default";
+                  }
+                  return Notifier.enabled(this) ? "granted" : "denied";
+              }
+
+              void requestNotifPermission() {
+                  if (Build.VERSION.SDK_INT >= 33
+                          && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                      SharedPreferences.Editor e = getSharedPreferences("app", MODE_PRIVATE).edit();
+                      e.putBoolean("askedNotif", true).apply();
+                      requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF);
+                  } else {
+                      sendPermState();
+                  }
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+                  if (requestCode == REQ_NOTIF) sendPermState();
+                  else super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+              }
+
+              void sendPermState() {
+                  final String st = notifState();
+                  web.post(() -> web.evaluateJavascript("window.__notifPermResult && window.__notifPermResult('" + st + "')", null));
+              }
+          }
+          SB_FILE_10_END
+
+          cat > app/src/main/java/com/grabbyapp/studybuddy/Notifier.java <<'SB_FILE_11_END'
+          package com.grabbyapp.studybuddy;
+
+          import android.Manifest;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.os.Build;
+
+          public class Notifier {
+              static final String CH_ALARM = "study_alarm";
+              static final String CH_GENERAL = "general";
+
+              static void createChannels(Context c) {
+                  if (Build.VERSION.SDK_INT < 26) return;
+                  NotificationManager nm = c.getSystemService(NotificationManager.class);
+                  if (nm == null) return;
+                  NotificationChannel alarm = new NotificationChannel(CH_ALARM, "Surprise study alarm", NotificationManager.IMPORTANCE_HIGH);
+                  alarm.setDescription("Rings when it is time for a surprise study quiz");
+                  alarm.enableVibration(true);
+                  alarm.setVibrationPattern(new long[]{0, 700, 300, 700, 300, 700});
+                  AudioAttributes attrs = new AudioAttributes.Builder()
+                          .setUsage(AudioAttributes.USAGE_ALARM)
+                          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                          .build();
+                  alarm.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), attrs);
+                  nm.createNotificationChannel(alarm);
+
+                  NotificationChannel general = new NotificationChannel(CH_GENERAL, "Study reminders", NotificationManager.IMPORTANCE_DEFAULT);
+                  general.setDescription("Focus timer and other reminders");
+                  nm.createNotificationChannel(general);
+              }
+
+              static boolean enabled(Context c) {
+                  NotificationManager nm = c.getSystemService(NotificationManager.class);
+                  return nm != null && nm.areNotificationsEnabled();
+              }
+
+              static void show(Context c, String channel, String title, String body, int id) {
+                  if (Build.VERSION.SDK_INT >= 33
+                          && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+                  NotificationManager nm = c.getSystemService(NotificationManager.class);
+                  if (nm == null) return;
+
+                  Intent open = new Intent(c, MainActivity.class)
+                          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  PendingIntent pi = PendingIntent.getActivity(c, id, open,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+                  Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                          ? new Notification.Builder(c, channel)
+                          : new Notification.Builder(c);
+                  b.setSmallIcon(R.drawable.ic_stat)
+                          .setColor(0xFF2563EB)
+                          .setContentTitle(title == null ? "Study Buddy" : title)
+                          .setContentText(body == null ? "" : body)
+                          .setStyle(new Notification.BigTextStyle().bigText(body == null ? "" : body))
+                          .setAutoCancel(true)
+                          .setContentIntent(pi);
+                  if (CH_ALARM.equals(channel)) {
+                      b.setCategory(Notification.CATEGORY_ALARM);
+                      if (Build.VERSION.SDK_INT < 26) {
+                          b.setPriority(Notification.PRIORITY_MAX);
+                          b.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM));
+                          b.setVibrate(new long[]{0, 700, 300, 700, 300, 700});
+                      }
+                  }
+                  nm.notify(id, b.build());
+              }
+          }
+          SB_FILE_11_END
+
+          cat > settings.gradle <<'SB_END'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "StudyBuddy"
+          include ':app'
+          SB_END
+
+          cat > build.gradle <<'SB_END'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          SB_END
+
+          cat > gradle.properties <<'SB_END'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g
+          SB_END
+
+          cat > app/build.gradle <<SB_END
+          plugins { id 'com.android.application' }
+          android {
+            namespace 'com.grabbyapp.studybuddy'
+            compileSdk 34
+            defaultConfig {
+              applicationId 'com.grabbyapp.studybuddy'
+              minSdk 24
+              targetSdk 34
+              versionCode ${VERSION_CODE}
+              versionName '${VERSION_NAME}'
+            }
+            signingConfigs {
+              release {
+                storeFile file(System.getenv('KS_PATH'))
+                storePassword System.getenv('KS_PASS')
+                keyAlias 'studybuddy'
+                keyPassword System.getenv('KS_PASS')
+              }
+            }
+            buildTypes {
+              release { minifyEnabled false; signingConfig signingConfigs.release }
+            }
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+            lint { checkReleaseBuilds false; abortOnError false }
+          }
+          dependencies {
+            implementation 'androidx.webkit:webkit:1.11.0'
+            implementation 'androidx.core:core:1.13.1'
+          }
+          SB_END
+
+      - name: Pack the Study Buddy app files into the APK
+        working-directory: sb
+        run: |
+          set -e
+          W=app/src/main/assets/www
+          for f in index.html admin.html app.js admin.js ui.js data.js brain.js config.js alarm.js importer.js schools.js styles.css manifest.json icon.svg; do
+            curl -fsSL --retry 3 "$SITE/$f" -o "$W/$f"
+          done
+          cp tools/android.js "$W/android.js"
+
+          get() { out="$1"; shift; for u in "$@"; do curl -fsSL --retry 3 "$u" -o "$out" && return 0; done; echo "Could not download $out"; exit 1; }
+          V=$W/vendor
+          get $V/supabase.js https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js
+          get $V/pdf.min.js https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js
+          get $V/pdf.worker.min.js https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js
+          get $V/jszip.min.js https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
+          get $V/qrcode.js https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js
+          get $V/tesseract/tesseract.min.js https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js
+          get $V/tesseract/worker.min.js https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js
+          for c in tesseract-core-simd-lstm.wasm.js tesseract-core-lstm.wasm.js; do
+            get $V/tesseract/$c https://cdn.jsdelivr.net/npm/tesseract.js-core@5/$c https://unpkg.com/tesseract.js-core@5/$c
+          done
+          get $V/tesseract/lang/eng.traineddata.gz \
+            https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz \
+            https://tessdata.projectnaptha.com/4.0.0_best/eng.traineddata.gz \
+            https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz
+
+          python3 - <<'SB_END'
+          import re, urllib.request, pathlib
+          ua = {"User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"}
+          url = "https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap"
+          css = urllib.request.urlopen(urllib.request.Request(url, headers=ua)).read().decode()
+          out = pathlib.Path("app/src/main/assets/www/vendor/fonts"); out.mkdir(parents=True, exist_ok=True)
+          for i, u in enumerate(dict.fromkeys(re.findall(r"url\((https://fonts\.gstatic\.com/[^)]+)\)", css))):
+              (out / f"f{i}.woff2").write_bytes(urllib.request.urlopen(urllib.request.Request(u, headers=ua)).read())
+              css = css.replace(u, f"fonts/f{i}.woff2")
+          pathlib.Path("app/src/main/assets/www/vendor/fonts.css").write_text(css)
+          print("fonts:", len(list(out.iterdir())))
+          SB_END
+
+          python3 tools/patch.py $W
+          grep -q 'window.Supabase\|createClient' $V/supabase.js
+          du -sh $W; find $W -type f | sort
+
+      - name: Make the app icons
+        working-directory: sb
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
+          res=app/src/main/res
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            name=${d%%:*}; size=${d##*:}
+            mkdir -p $res/mipmap-$name
+            rsvg-convert -w $size -h $size app/src/main/assets/www/icon.svg -o $res/mipmap-$name/ic_launcher.png
+          done
+
+      - name: Create a signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.keystore
+            KS_PASS="$KEYSTORE_PASSWORD"
+          else
+            KS_PASS=$(openssl rand -hex 16)
+            keytool -genkeypair -keystore release.keystore -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -alias studybuddy -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Study Buddy, OU=grabbyapp, O=grabbyapp, C=PH"
+          fi
+          echo "::add-mask::$KS_PASS"
+          echo "KS_PASS=$KS_PASS" >> $GITHUB_ENV
+          echo "KS_PATH=$PWD/release.keystore" >> $GITHUB_ENV
+          keytool -list -v -keystore release.keystore -storepass "$KS_PASS" -alias studybuddy | grep 'SHA256:'
+
+      - name: Build the APK
+        working-directory: sb
+        run: |
+          gradle --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../StudyBuddy.apk
+          cd .. && ls -l StudyBuddy.apk
+          unzip -l StudyBuddy.apk | grep -c 'assets/www/'
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: Study Buddy ${{ env.VERSION_NAME }}
+          make_latest: "true"
+          body: |
+            Study Buddy for Android, the full app. Everything is inside the APK and runs on your phone.
+            Download **StudyBuddy.apk** below and open it on your phone.
+            If you installed version 1.0.0, uninstall it first.
+          files: StudyBuddy.apk
