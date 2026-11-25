@@ -2072,8 +2072,20 @@ jobs:
             exit 1
           fi
           # ignore spaces / line breaks that sneak in when the secrets are pasted
-          printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > release.keystore
-          KS_PASS=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:space:]')
+          B=$(printf '%s' "$KEYSTORE_B64" | tr -d '[:space:]')
+          P=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '[:space:]')
+          if [ ${#P} -gt 200 ] && [ ${#B} -lt 200 ]; then
+            echo "The two secrets look swapped, using them the other way round."
+            T="$B"; B="$P"; P="$T"
+          fi
+          echo "Key text: ${#B} characters (expected 3584). Password: ${#P} characters (expected 32)."
+          if ! printf '%s' "$B" | base64 -d > release.keystore 2>/dev/null; then
+            echo "::error::KEYSTORE_B64 is not the text from KEYSTORE_B64.txt. Paste it again."; exit 1
+          fi
+          if ! keytool -list -keystore release.keystore -storepass "$P" >/dev/null 2>&1; then
+            echo "::error::The key and the password don't match. Re-paste KEYSTORE_PASSWORD from KEYSTORE_PASSWORD.txt."; exit 1
+          fi
+          KS_PASS="$P"
           echo "::add-mask::$KS_PASS"
           echo "KS_PASS=$KS_PASS" >> $GITHUB_ENV
           echo "KS_PATH=$PWD/release.keystore" >> $GITHUB_ENV
