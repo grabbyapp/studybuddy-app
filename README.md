@@ -14,6 +14,6 @@ Or visit the download page: https://grabbyapp.github.io/studybuddy-app/
 2. Open the file. If your phone blocks it, tap **Settings**, turn on **Allow from this source**, then go back.
 3. Tap **Install**, then **Open**.
 
-The app always loads the newest version of Study Buddy, so you only need to install it once.
+The whole app is inside the APK and runs on your phone. You need internet to sign in, sync your decks and use the AI flashcards. Needs Android 7.0 or newer.
 
 Prefer the browser? Use it on the web: https://melodic-mousse-4aeab3.netlify.app/
